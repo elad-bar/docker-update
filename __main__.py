@@ -10,10 +10,10 @@ PROTOCOLS = {
     False: "http"
 }
 
-DEBUG = True
-FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+DEBUG = False
 
-logging.basicConfig(filename='docker-update.log', level=logging.INFO)
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -93,7 +93,9 @@ class Manager:
 
             if not DEBUG:
                 _LOGGER.info("Redeploy stack via Portainer")
-                async with session.put(self.stack_url, headers=headers, data=json.dumps(update_stack_data)) as resp:
+                url = f"{self.stack_url}?endpointId=1"
+
+                async with session.put(url, headers=headers, data=json.dumps(update_stack_data)) as resp:
                     resp.raise_for_status()
             else:
                 _LOGGER.info("Skipping redeploy stack via Portainer")
