@@ -24,13 +24,15 @@ class Manager:
         containers_to_stop = os.getenv("CONTAINERS_TO_STOP", "")
 
         self._client = docker.from_env()
-        self._connector = aiohttp.TCPConnector(ssl=False)
         self._portainer_host = os.getenv("PORTAINER_HOST")
         self._portainer_ssl = bool(os.getenv("PORTAINER_SSL", False))
         self._portainer_username = os.getenv("PORTAINER_USERNAME")
         self._portainer_password = os.getenv("PORTAINER_PASSWORD")
         self._portainer_stack_id = os.getenv("PORTAINER_STACK_ID")
         self._containers_to_stop = containers_to_stop.split(",")
+
+        ssl_context = False if self._portainer_ssl else None
+        self._connector = aiohttp.TCPConnector(ssl=ssl_context)
 
     @property
     def base_url(self):
