@@ -1,3 +1,4 @@
+import sys
 import os
 import json
 import asyncio
@@ -10,9 +11,14 @@ PROTOCOLS = {
     False: "http"
 }
 
-DEBUG = False
+root = logging.getLogger()
+root.setLevel(logging.DEBUG)
 
-logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s', datefmt='%b %d %Y %H:%M:%S')
+handler.setFormatter(formatter)
+root.addHandler(handler)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,8 +37,15 @@ class Manager:
         self._portainer_stack_id = os.getenv("PORTAINER_STACK_ID")
         self._containers_to_stop = containers_to_stop.split(",")
 
+        _LOGGER.info((
+            f"Loading configuration for {self._portainer_username}:{self._portainer_password}@{self._portainer_host}"
+            f" - SSL: {self._portainer_ssl}"
+        ))
+
         ssl_context = False if self._portainer_ssl else None
         self._connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+        self._is_debug = os.getenv("DEBUG", False)
 
     @property
     def base_url(self):
@@ -93,7 +106,7 @@ class Manager:
                 "StackFileContent": stack_file_content
             }
 
-            if not DEBUG:
+            if not self._is_debug:
                 _LOGGER.info("Redeploy stack via Portainer")
                 url = f"{self.stack_url}?endpointId=1"
 
