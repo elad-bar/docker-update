@@ -29,7 +29,8 @@ services:
     hostname: "portainer2mqtt"
     restart: always
     environment:
-      - DOCKER_HOST=vto-host
+      - DOCKER_HOST=tcp://localhost:2375
+      - PORTAINER_HOST=localhost:9000
       - PORTAINER_SSL=Username
       - PORTAINER_USERNAME=Password
       - PORTAINER_PASSWORD=mqtt-host
