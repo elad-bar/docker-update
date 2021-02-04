@@ -2,14 +2,30 @@ import sys
 import os
 import json
 import asyncio
+from time import sleep
+from typing import List
+
 import aiohttp
 import docker
 import logging
+import paho.mqtt.client as mqtt
 
 PROTOCOLS = {
     True: "https",
     False: "http"
 }
+
+INTERVAL_MAPPING = {
+    "0": 24 * 60 * 60,
+    "1": 60 * 60,
+    "2": 60,
+    "3": 1
+}
+
+DEFAULT_INTERVAL = "01:00:00:00"
+
+TOPIC_STATUS = "portainer/containers/status"
+TOPIC_UPDATE = "portainer/stack/update"
 
 root = logging.getLogger()
 root.setLevel(logging.DEBUG)
@@ -27,15 +43,60 @@ class Manager:
     def __init__(self):
         _LOGGER.info("Loading configuration")
 
-        containers_to_stop = os.getenv("CONTAINERS_TO_STOP", "")
+        self._loop = asyncio.get_event_loop()
 
         self._client = docker.from_env()
         self._portainer_host = os.getenv("PORTAINER_HOST")
         self._portainer_ssl = bool(os.getenv("PORTAINER_SSL", False))
         self._portainer_username = os.getenv("PORTAINER_USERNAME")
         self._portainer_password = os.getenv("PORTAINER_PASSWORD")
-        self._portainer_stack_id = os.getenv("PORTAINER_STACK_ID")
-        self._containers_to_stop = containers_to_stop.split(",")
+
+        self._mqtt_broker_host = os.getenv("MQTT_BROKER_HOST")
+        self._mqtt_broker_port = os.getenv("MQTT_BROKER_PORT")
+        self._mqtt_broker_username = os.getenv("MQTT_BROKER_USERNAME")
+        self._mqtt_broker_password = os.getenv("MQTT_BROKER_PASSWORD")
+
+        interval = os.getenv("INTERVAL", DEFAULT_INTERVAL)
+        interval_seconds = 0
+        interval_parts = interval.split(":")
+
+        if len(interval_parts) != 4:
+            _LOGGER.warning("Invalid interval, setting to default")
+
+            interval = DEFAULT_INTERVAL
+
+        index = 0
+        for i in interval_parts:
+            maximum = 60
+
+            if index == 0:
+                maximum = None
+
+            if maximum is not None and int(i) > maximum:
+                _LOGGER.warning(f"Invalid interval, expected up to {maximum}, actual: {i}, setting to default")
+
+                interval = DEFAULT_INTERVAL
+
+            if int(i) < 0:
+                _LOGGER.warning(f"Invalid interval, {i} is below minimum, setting to default")
+
+                interval = DEFAULT_INTERVAL
+
+            index += 1
+
+        interval_parts = interval.split(":")
+
+        index = 0
+        for i in interval_parts:
+            factor = INTERVAL_MAPPING.get(str(index))
+
+            interval_seconds += factor * int(i)
+
+            index += 1
+
+        self._interval = interval_seconds
+
+        self._mqtt_client = mqtt.Client()
 
         _LOGGER.info((
             f"Loading configuration for {self._portainer_username}:{self._portainer_password}@{self._portainer_host}"
@@ -58,26 +119,103 @@ class Manager:
         return f"{self.base_url}/api/auth"
 
     @property
-    def stack_url(self):
-        return f"{self.base_url}/api/stacks/{self._portainer_stack_id}"
+    def stacks_url(self):
+        return f"{self.base_url}/api/stacks"
 
-    @property
-    def stack_file_url(self):
-        return f"{self.stack_url}/file"
+    def initialize(self):
+        self.initialize_mqtt_client()
 
-    async def update(self):
+        _LOGGER.info(self._interval)
+
+        while True:
+            try:
+                self._loop.run_until_complete(self.update_images())
+
+                _LOGGER.info(f"Next iteration in {self._interval} seconds")
+                sleep(self._interval)
+
+            except Exception as ex:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                line = exc_tb.tb_lineno
+
+                _LOGGER.error(f"Connection failed will try to connect in 30 seconds, error: {ex}, Line: {line}")
+
+                sleep(30)
+
+    def initialize_mqtt_client(self):
+        _LOGGER.info("Connecting MQTT Broker")
+
+        self._mqtt_client.username_pw_set(self._mqtt_broker_username, self._mqtt_broker_password)
+
+        self._mqtt_client.on_connect = self.on_mqtt_connect
+        self._mqtt_client.on_message = self.on_mqtt_message
+        self._mqtt_client.on_disconnect = self.on_mqtt_disconnect
+
+        self._mqtt_client.connect(self._mqtt_broker_host, int(self._mqtt_broker_port), 600)
+        self._mqtt_client.loop_start()
+
+    @staticmethod
+    def on_mqtt_connect(client, userdata, flags, rc):
+        _LOGGER.info(f"MQTT Broker connected with result code {rc}")
+
+        client.subscribe(TOPIC_UPDATE)
+
+    @staticmethod
+    def on_mqtt_message(client, userdata, msg):
+        _LOGGER.debug(f"MQTT Message {msg.topic}: {msg.payload}")
+
+        if msg.topic == TOPIC_UPDATE:
+            payload = msg.payload.decode("utf-8")
+
+            data = {}
+
+            if len(payload) > 0:
+                data = json.loads(payload)
+
+            stacks = data.get("stacks")
+            auto_stop_containers = data.get("autoStopContainers", [])
+
+            _LOGGER.info(f"Stacks: {stacks}")
+            _LOGGER.info(f"Auto Stop Containers: {auto_stop_containers}")
+
+            manager.update(stacks, auto_stop_containers)
+
+    @staticmethod
+    def on_mqtt_disconnect(client, userdata, rc):
+        connected = False
+
+        while not connected:
+            try:
+                _LOGGER.info(f"MQTT Broker got disconnected trying to reconnect")
+
+                mqtt_broker_host = os.getenv('MQTT_BROKER_HOST')
+                mqtt_broker_port = os.getenv('MQTT_BROKER_PORT')
+
+                client.connect(mqtt_broker_host, int(mqtt_broker_port), 600)
+                client.loop_start()
+
+                connected = True
+
+            except Exception as ex:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+
+                _LOGGER.error(f"Failed to reconnect, retry in 60 seconds, error: {ex}, Line: {exc_tb.tb_lineno}")
+
+                sleep(60)
+
+    def update(self, include_stacks: List[str] = None, auto_stop_containers: List[str] = None):
         _LOGGER.info("Starting to update")
 
-        downloaded_images = self.update_docker()
+        self._loop.run_until_complete(self.reload_containers(include_stacks))
 
-        if len(downloaded_images) > 0 and self._portainer_host is not None:
-            await self.reload_containers()
-
-            self.stop_relevant_containers()
+        self.stop_relevant_containers(auto_stop_containers)
 
         _LOGGER.info("Updated completed")
 
-    async def reload_containers(self):
+    def reload_containers_sync(self, include_stacks: List[str]):
+        self._loop.run_until_complete(self.reload_containers(include_stacks))
+
+    async def reload_containers(self, include_stacks: List[str] = None):
         async with aiohttp.ClientSession(connector=self._connector) as session:
             login_data = {
                 "Username": self._portainer_username,
@@ -95,38 +233,48 @@ class Manager:
                 "Authorization": f"Bearer {jwt_token}"
             }
 
-            _LOGGER.info("Get stack file content from Portainer")
-            async with session.get(self.stack_file_url, headers=headers) as resp:
+            _LOGGER.info("Get stacks from Portainer")
+            async with session.get(self.stacks_url, headers=headers) as resp:
                 resp.raise_for_status()
 
-                json_response = await resp.json()
-                stack_file_content = json_response.get("StackFileContent")
+                stacks = await resp.json()
 
-            update_stack_data = {
-                "StackFileContent": stack_file_content
-            }
+            for stack in stacks:
+                stack_id = stack.get("Id")
+                stack_name = stack.get("Name")
 
-            if not self._is_debug:
-                _LOGGER.info("Redeploy stack via Portainer")
-                url = f"{self.stack_url}?endpointId=1"
+                stack_url = f"{self.stacks_url}/{stack_id}"
+                stack_file_url = f"{stack_url}/file"
 
-                async with session.put(url, headers=headers, data=json.dumps(update_stack_data)) as resp:
-                    resp.raise_for_status()
-            else:
-                _LOGGER.info("Skipping redeploy stack via Portainer")
+                if include_stacks is None or stack_name in include_stacks:
+                    _LOGGER.info(f"Get stack {stack_name} [#{stack_id}]")
+                    async with session.get(stack_file_url, headers=headers) as resp:
+                        resp.raise_for_status()
 
-    def stop_relevant_containers(self):
-        for container_name in self._containers_to_stop:
+                        update_stack_data = await resp.json()
+
+                    url = f"{stack_url}?endpointId=1"
+
+                    _LOGGER.info(f"Redeploy stack {stack_name} [#{stack_id}]")
+                    async with session.put(url, headers=headers, data=json.dumps(update_stack_data)) as resp:
+                        resp.raise_for_status()
+
+                else:
+                    _LOGGER.info(f"Skip stack {stack_name} [#{stack_id}]")
+
+    def stop_relevant_containers(self, auto_stop_containers: List[str]):
+        for container_name in auto_stop_containers:
             _LOGGER.info(f"Stopping container: {container_name}")
 
             container = self._client.containers.get(container_name)
             container.stop()
 
-    def update_docker(self):
-        containers = self._client.containers.list()
-        downloaded = []
-
+    async def update_images(self):
         _LOGGER.info("Starting to look for new images")
+
+        containers = self._client.containers.list()
+
+        containers_data = []
 
         index = 0
         total = len(containers)
@@ -149,14 +297,27 @@ class Manager:
             new_image_id = new_image.attrs.get("Id")
 
             if new_image_id != image_id:
-                _LOGGER.info(f"{name}: {image_name} - Image pulled")
-                downloaded.append(name)
+                container_data = {
+                    "containerName": name,
+                    "imageName": image_name,
+                    "imageId": image_id,
+                    "newImageId": new_image_id
+                }
 
-        return downloaded
+                containers_data.append(container_data)
+
+                _LOGGER.info(f"{name}: {image_name} - Image pulled")
+
+        updated = len(containers_data) > 0
+
+        if updated:
+            message = {
+                "containers": containers_data
+            }
+
+            self._mqtt_client.publish(TOPIC_STATUS, json.dumps(message, indent=4))
 
 
 manager = Manager()
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(manager.update())
-loop.close()
+manager.initialize()
