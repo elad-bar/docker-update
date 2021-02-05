@@ -163,7 +163,10 @@ class Manager:
     def on_mqtt_connect(client, userdata, flags, rc):
         _LOGGER.info(f"MQTT Broker connected with result code {rc}")
 
-        client.subscribe([TOPIC_STACKS_UPDATE, TOPIC_IMAGES_UPDATE])
+        client.subscribe([
+            (TOPIC_STACKS_UPDATE, 1),
+            (TOPIC_IMAGES_UPDATE, 1)
+        ])
 
     @staticmethod
     def on_mqtt_message(client, userdata, msg):
