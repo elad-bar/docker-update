@@ -15,6 +15,7 @@ Updates all images and performs update stack
 | MQTT_BROKER_USERNAME | MQTT Broker username | Empty |
 | MQTT_BROKER_PASSWORD | MQTT Broker password | Empty |
 | INTERVAL | Interval between image update check | 01:00:00:00 |
+| DEBUG | Set log level to Debug  | false |
 
 ### Interval format
 Days:Hours:Minutes:Seconds
@@ -39,11 +40,12 @@ services:
       - MQTT_BROKER_USERNAME=Username
       - MQTT_BROKER_PASSWORD=Password 
       - INTERVAL=01:00:00:00
+      - DEBUG=False
 ```
 
 ## MQTT Messages
-### Status update (Publishing)
-Topic: ```portainer/containers/status```
+### Pending images to update (Publishing)
+Topic: ```portainer/images/pending```
 
 Data: 
 ```json
@@ -57,8 +59,11 @@ Data:
 }
 ```
 
+### Update images (Listening)
+Topic: ```portainer/images/update```
+
 ### Update stacks (Listening)
-Topic: ```portainer/stack/update```
+Topic: ```portainer/stacks/update```
 
 Data: 
 ```json
@@ -71,3 +76,5 @@ Data:
 ## Changelog
 
 * 2021-Feb-04 - Initial version
+  
+* 2021-Feb-05 - Added debug log level, renamed MQTT topics, additional topic of force update images 

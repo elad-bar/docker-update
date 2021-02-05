@@ -24,14 +24,21 @@ INTERVAL_MAPPING = {
 
 DEFAULT_INTERVAL = "01:00:00:00"
 
-TOPIC_STATUS = "portainer/containers/status"
-TOPIC_UPDATE = "portainer/stack/update"
+
+TOPIC_IMAGES_STATUS = "portainer/images/pending"
+TOPIC_IMAGES_UPDATE = "portainer/images/update"
+TOPIC_STACKS_UPDATE = "portainer/stacks/update"
+
+log_level = logging.INFO
+
+if os.getenv("DEBUG", False):
+    log_level = logging.DEBUG
 
 root = logging.getLogger()
-root.setLevel(logging.DEBUG)
+root.setLevel(log_level)
 
 handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
+handler.setLevel(log_level)
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s', datefmt='%b %d %Y %H:%M:%S')
 handler.setFormatter(formatter)
 root.addHandler(handler)
@@ -106,8 +113,6 @@ class Manager:
         ssl_context = False if self._portainer_ssl else None
         self._connector = aiohttp.TCPConnector(ssl=ssl_context)
 
-        self._is_debug = os.getenv("DEBUG", False)
-
     @property
     def base_url(self):
         protocol = PROTOCOLS[self._portainer_ssl]
@@ -129,7 +134,7 @@ class Manager:
 
         while True:
             try:
-                self._loop.run_until_complete(self.update_images())
+                self.update_images()
 
                 _LOGGER.info(f"Next iteration in {self._interval} seconds")
                 sleep(self._interval)
@@ -158,13 +163,13 @@ class Manager:
     def on_mqtt_connect(client, userdata, flags, rc):
         _LOGGER.info(f"MQTT Broker connected with result code {rc}")
 
-        client.subscribe(TOPIC_UPDATE)
+        client.subscribe([TOPIC_STACKS_UPDATE, TOPIC_IMAGES_UPDATE])
 
     @staticmethod
     def on_mqtt_message(client, userdata, msg):
         _LOGGER.debug(f"MQTT Message {msg.topic}: {msg.payload}")
 
-        if msg.topic == TOPIC_UPDATE:
+        if msg.topic == TOPIC_STACKS_UPDATE:
             payload = msg.payload.decode("utf-8")
 
             data = {}
@@ -178,7 +183,9 @@ class Manager:
             _LOGGER.info(f"Stacks: {stacks}")
             _LOGGER.info(f"Auto Stop Containers: {auto_stop_containers}")
 
-            manager.update(stacks, auto_stop_containers)
+            manager.update_stacks(stacks, auto_stop_containers)
+        elif msg.topic == TOPIC_IMAGES_UPDATE:
+            manager.update_images()
 
     @staticmethod
     def on_mqtt_disconnect(client, userdata, rc):
@@ -203,19 +210,16 @@ class Manager:
 
                 sleep(60)
 
-    def update(self, include_stacks: List[str] = None, auto_stop_containers: List[str] = None):
-        _LOGGER.info("Starting to update")
+    def update_stacks(self, include_stacks: List[str] = None, stop_containers: List[str] = None):
+        _LOGGER.info("Starting to update stacks")
 
-        self._loop.run_until_complete(self.reload_containers(include_stacks))
+        self._loop.run_until_complete(self.update_stacks_async(include_stacks))
 
-        self.stop_relevant_containers(auto_stop_containers)
+        self.auto_stop_containers(stop_containers)
 
-        _LOGGER.info("Updated completed")
+        _LOGGER.info("Update stacks completed")
 
-    def reload_containers_sync(self, include_stacks: List[str]):
-        self._loop.run_until_complete(self.reload_containers(include_stacks))
-
-    async def reload_containers(self, include_stacks: List[str] = None):
+    async def update_stacks_async(self, include_stacks: List[str] = None):
         async with aiohttp.ClientSession(connector=self._connector) as session:
             login_data = {
                 "Username": self._portainer_username,
@@ -262,14 +266,17 @@ class Manager:
                 else:
                     _LOGGER.info(f"Skip stack {stack_name} [#{stack_id}]")
 
-    def stop_relevant_containers(self, auto_stop_containers: List[str]):
-        for container_name in auto_stop_containers:
+    def auto_stop_containers(self, containers: List[str]):
+        for container_name in containers:
             _LOGGER.info(f"Stopping container: {container_name}")
 
             container = self._client.containers.get(container_name)
             container.stop()
 
-    async def update_images(self):
+    def update_images(self):
+        self._loop.run_until_complete(self.update_images_async())
+
+    async def update_images_async(self):
         _LOGGER.info("Starting to look for new images")
 
         containers = self._client.containers.list()
@@ -315,7 +322,7 @@ class Manager:
                 "containers": containers_data
             }
 
-            self._mqtt_client.publish(TOPIC_STATUS, json.dumps(message, indent=4))
+            self._mqtt_client.publish(TOPIC_IMAGES_STATUS, json.dumps(message, indent=4))
 
 
 manager = Manager()
