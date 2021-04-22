@@ -78,3 +78,5 @@ Data:
 * 2021-Feb-04 - Initial version
   
 * 2021-Feb-05 - Added debug log level, renamed MQTT topics, additional topic of force update images 
+
+* 2021-Apr-22 - Reset mutex upon error

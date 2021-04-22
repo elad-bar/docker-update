@@ -40,6 +40,8 @@ class Manager:
 
         self._interval = self.interval
 
+        self._docker_manager.get_ha()
+
     @property
     def interval(self):
         interval = os.getenv("INTERVAL", DEFAULT_INTERVAL)
@@ -93,6 +95,8 @@ class Manager:
                 sleep(self._interval)
 
             except Exception as ex:
+                self._docker_manager.reset_status()
+                
                 exc_type, exc_obj, exc_tb = sys.exc_info()
                 line = exc_tb.tb_lineno
 
@@ -138,4 +142,4 @@ class Manager:
 
 manager = Manager()
 
-manager.initialize()
+# manager.initialize()

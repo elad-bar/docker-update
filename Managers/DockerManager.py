@@ -8,6 +8,7 @@ import docker
 import logging
 
 from aiohttp import ClientSession
+from docker.models.containers import Container
 
 from Common.consts import *
 
@@ -191,10 +192,15 @@ class DockerManager:
         for container_name in containers:
             _LOGGER.info(f"Stopping container: {container_name}")
 
-            container = self._client.containers.get(container_name)
+            container: Container = self._client.containers.get(container_name)
             container.stop()
 
         self.reset_status()
+
+    def get_ha(self):
+        ha = self._client.containers.get("homeassistant")
+        ha.start()
+        print(json.dumps(ha.attrs, indent=4))
 
     async def update_images_async(self, publish):
         if not self.validate_status(STATUS_UPDATING_IMAGES):
