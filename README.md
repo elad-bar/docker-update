@@ -80,3 +80,5 @@ Data:
 * 2021-Feb-05 - Added debug log level, renamed MQTT topics, additional topic of force update images 
 
 * 2021-Apr-22 - Reset mutex upon error
+  
+* 2021-Apr-23 - Fix initialization

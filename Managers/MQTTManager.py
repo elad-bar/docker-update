@@ -51,12 +51,19 @@ class MQTTManager:
 
     @staticmethod
     def on_mqtt_connect(client, userdata, flags, rc):
-        _LOGGER.info(f"MQTT Broker connected with result code {rc}")
 
-        client.subscribe([
-            (TOPIC_STACKS_UPDATE, 0),
-            (TOPIC_IMAGES_UPDATE, 0)
-        ])
+        if rc == 0:
+            _LOGGER.info(f"MQTT Broker connected with result code {rc}")
+
+            client.subscribe([
+                (TOPIC_STACKS_UPDATE, 0),
+                (TOPIC_IMAGES_UPDATE, 0)
+            ])
+
+        else:
+            error_message = MQTT_ERROR_MESSAGES.get(rc, MQTT_ERROR_DEFAULT_MESSAGE)
+
+            _LOGGER.error(error_message)
 
     @staticmethod
     def on_mqtt_message(client, userdata, msg):

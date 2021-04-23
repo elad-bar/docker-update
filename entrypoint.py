@@ -12,7 +12,7 @@ from Managers.DockerManager import DockerManager
 from Managers.MQTTManager import MQTTManager
 
 log_level = logging.INFO
-is_debug = os.getenv("DEBUG", False).lower() == str(True).lower()
+is_debug = str(os.getenv("DEBUG", False)).lower() == str(True).lower()
 
 if is_debug:
     log_level = logging.DEBUG
@@ -142,4 +142,4 @@ class Manager:
 
 manager = Manager()
 
-# manager.initialize()
+manager.initialize()
